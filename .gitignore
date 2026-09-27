@@ -2,6 +2,8 @@ node_modules/
 jspm_packages/
 web_modules/
 output/
+tmp_downloads/
+cookies.txt
 
 dist/
 build/

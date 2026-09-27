@@ -19,7 +19,8 @@ async function run(query?: string) {
     }
 
     for (const video of videos) {
-        await downloadMP3(video.url, video.title, downloadFolder);
+        const cleanName = `${video.author} - ${video.title}`;
+        await downloadMP3(video.url, cleanName, downloadFolder, video.author, video.title);
     }
 
     console.log(`✅ Playlist downloaded.`);

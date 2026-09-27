@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    container_name: youtube-mp3-downloader
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+    volumes:
+      - ./public:/app/public
+      - ./dist:/app/dist
+    restart: unless-stopped
