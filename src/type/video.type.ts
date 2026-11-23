@@ -9,6 +9,8 @@ export type Video = {
     rawArtist?: string;
     rawTrack?: string;
     rawAlbum?: string;
+    /** "youtube-music": metadados oficiais · "title": inferido do título (conferir) · "pending": ainda buscando. */
+    metadataSource?: "youtube-music" | "title" | "pending";
     duration?: string;
     thumbnail?: string;
     rawJson?: any;
@@ -18,6 +20,10 @@ export type Video = {
     originalUrl?: string;
     originalId?: string;
     topicChannel?: string;
+    /** O vídeo da playlist está indisponível e foi trocado por um equivalente (ID original em originalId). */
+    replaced?: boolean;
+    /** Indisponível e sem equivalente encontrado. */
+    unavailable?: boolean;
 };
 
 export type DownloadProgressEvent = {
@@ -31,6 +37,12 @@ export type DownloadProgressEvent = {
         author: string;
     };
     percent?: number;
+    /** Percentual do job inteiro (downloads em paralelo). */
+    overallPercent?: number;
+    /** Faixas já processadas (com sucesso ou não). */
+    completedCount?: number;
+    /** IDs que falharam — ficam fora do ZIP e do histórico. */
+    failedIds?: string[];
     message?: string;
     downloadUrl?: string;
 };

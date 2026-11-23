@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
+import { removeQuietly } from "./fsRetry";
 
 export async function zipFolder(source: string, out: string): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -43,24 +44,12 @@ export async function zipFolder(source: string, out: string): Promise<number> {
     });
 }
 
+/** Esvazia a pasta (e a remove, se `removeSelf`). Tolera arquivos bloqueados por instantes no Windows. */
 export function clearFolder(folder: string, removeSelf = false) {
     if (!fs.existsSync(folder)) return;
-
-    try {
-        const files = fs.readdirSync(folder);
-        for (const file of files) {
-            const filePath = path.join(folder, file);
-            const stat = fs.statSync(filePath);
-            if (stat.isDirectory()) {
-                clearFolder(filePath, true);
-            } else {
-                fs.unlinkSync(filePath);
-            }
-        }
-        if (removeSelf) {
-            fs.rmdirSync(folder);
-        }
-    } catch (err) {
-        console.error(`Error cleaning directory ${folder}:`, err);
+    if (removeSelf) {
+        removeQuietly(folder);
+        return;
     }
+    for (const file of fs.readdirSync(folder)) removeQuietly(path.join(folder, file));
 }

@@ -33,3 +33,6 @@ coverage/
 *.njsproj
 *.sln
 *.swp
+
+# Frontend build output (gerado por vite build a partir de web/)
+public/
