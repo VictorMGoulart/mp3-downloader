@@ -6,8 +6,8 @@ tmp_downloads/
 cookies.txt
 
 dist/
-build/
-lib/
+/build/
+/lib/
 tsbuildinfo.json
 
 .env
