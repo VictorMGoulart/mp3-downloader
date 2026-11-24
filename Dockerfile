@@ -1,5 +1,5 @@
 # ---------- Build (frontend + backend) ----------
-FROM node:20-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 
 COPY package*.json ./
@@ -12,7 +12,7 @@ RUN npm run build && npm prune --omit=dev
 
 
 # ---------- Runtime ----------
-FROM node:20-bookworm-slim
+FROM node:24-bookworm-slim
 
 ENV NODE_ENV=production \
     PATH="/opt/venv/bin:/usr/local/bin:$PATH" \
