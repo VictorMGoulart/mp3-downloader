@@ -15,7 +15,7 @@ import { renameWithRetry, removeQuietly } from "./fsRetry";
 import { writeTags } from "./tags";
 import { musicNext } from "./ytmusic";
 import { isVideoId } from "./validation";
-import { buildArgs, explainYtDlpError, runYtDlp } from "./ytdlp";
+import { type RunResult, buildArgs, explainYtDlpError, runYtDlp } from "./ytdlp";
 
 export function formatDuration(seconds?: number | string | null): string {
     if (!seconds) return "--:--";
@@ -251,10 +251,22 @@ export function applyReplacement(v: Video, r: Replacement): void {
 export const searchQuery = (v: Pick<Video, "author" | "title">) => `${v.author} ${v.title} "Provided to YouTube"`;
 
 /** Extrai metadados de várias URLs/buscas num único processo (a inicialização do yt-dlp custa ~1,5 s). */
+/**
+ * Registra no log por que a consulta de metadados falhou (bloqueio anti-bot, 429, timeout).
+ * Sem isso, as faixas só aparecem como "inferido" e não dá para saber o motivo.
+ * "Vídeo indisponível" é esperado (tratado pela troca de versão) e não é registrado.
+ */
+function logMetadataFailure(result: RunResult) {
+    if (result.aborted) return;
+    if (result.timedOut) return console.warn("[metadata] tempo esgotado consultando o YouTube");
+    const explained = explainYtDlpError(result.stderr);
+    if (explained && !/indisponível/.test(explained)) console.warn(`[metadata] ${explained}`);
+}
+
 async function streamInfos(targets: string[], onInfo: (info: any) => void, signal?: AbortSignal) {
     if (targets.length === 0) return null;
     try {
-        return await runYtDlp(buildArgs(["--skip-download", "--no-playlist", "--ignore-errors", "--dump-json"], targets), {
+        const result = await runYtDlp(buildArgs(["--skip-download", "--no-playlist", "--ignore-errors", "--dump-json"], targets), {
             timeoutMs: config.ytdlp.topicLookupTimeoutMs * targets.length,
             signal,
             onStdoutLine: (line) => {
@@ -265,6 +277,8 @@ async function streamInfos(targets: string[], onInfo: (info: any) => void, signa
                 }
             },
         });
+        logMetadataFailure(result);
+        return result;
     } catch (err) {
         console.warn("[metadata]", (err as Error).message);
         return null;

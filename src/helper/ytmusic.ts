@@ -1,3 +1,4 @@
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { config } from "../config";
 import { isVideoId } from "./validation";
 
@@ -55,23 +56,45 @@ export function parseNextResponse(json: unknown): MusicTrack | null {
     return { videoId, title, artist, album: typeof albumRun?.text === "string" ? albumRun.text.trim() : undefined };
 }
 
+let proxyAgent: ProxyAgent | null | undefined;
+
+/**
+ * Agente para sair pelo mesmo proxy do yt-dlp (YTDLP_PROXY). Sem ele, esta consulta sairia
+ * direto do servidor, e IPs de datacenter costumam ser bloqueados pelo YouTube.
+ * Só proxies HTTP(S); com SOCKS, a consulta sai direto.
+ */
+export function proxyAgentFor(proxy: string | undefined): ProxyAgent | null {
+    if (!proxy) return null;
+    if (!/^https?:\/\//i.test(proxy)) {
+        console.warn("[ytmusic] YTDLP_PROXY não é HTTP(S); a consulta ao YouTube Music sai sem proxy.");
+        return null;
+    }
+    return new ProxyAgent(proxy);
+}
+
 /** Faixa que o YouTube Music tocaria para este ID. Nunca lança: em falha retorna null. */
 export async function musicNext(videoId: string, signal?: AbortSignal): Promise<MusicTrack | null> {
     if (!config.ytdlp.musicFallback || signal?.aborted) return null;
+    if (proxyAgent === undefined) proxyAgent = proxyAgentFor(config.ytdlp.proxy);
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
     const onAbort = () => ctrl.abort();
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
-        const res = await fetch(ENDPOINT, {
+        const res = await undiciFetch(ENDPOINT, {
             method: "POST",
             headers: { "Content-Type": "application/json", Origin: "https://music.youtube.com" },
             body: JSON.stringify({ videoId, isAudioOnly: true, context: { client: CLIENT } }),
             signal: ctrl.signal,
+            dispatcher: proxyAgent ?? undefined,
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+            console.warn(`[ytmusic] ${videoId}: HTTP ${res.status}`);
+            return null;
+        }
         return parseNextResponse(await res.json());
-    } catch {
+    } catch (err) {
+        if (!signal?.aborted) console.warn(`[ytmusic] ${videoId}: ${(err as Error).message}`);
         return null;
     } finally {
         clearTimeout(timer);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseNextResponse } from "./ytmusic";
+import { ProxyAgent } from "undici";
+import { parseNextResponse, proxyAgentFor } from "./ytmusic";
 
 const albumRun = (text: string) => ({
     text,
@@ -52,5 +53,21 @@ describe("parseNextResponse", () => {
         expect(parseNextResponse(null)).toBeNull();
         expect(parseNextResponse(response({ videoId: "x", title: { runs: [{ text: "T" }] }, longBylineText: { runs: [{ text: "A" }] } }))).toBeNull();
         expect(parseNextResponse(response({ videoId: "Smmua48ORw4", title: { runs: [] }, longBylineText: { runs: [] } }))).toBeNull();
+    });
+});
+
+describe("proxyAgentFor", () => {
+    it("sem proxy configurado, a consulta sai direto", () => {
+        expect(proxyAgentFor(undefined)).toBeNull();
+        expect(proxyAgentFor("")).toBeNull();
+    });
+
+    it("usa o proxy HTTP(S) do yt-dlp", () => {
+        expect(proxyAgentFor("http://user:pass@proxy.example:8080")).toBeInstanceOf(ProxyAgent);
+        expect(proxyAgentFor("https://proxy.example:8443")).toBeInstanceOf(ProxyAgent);
+    });
+
+    it("ignora proxy SOCKS (não suportado nesta consulta)", () => {
+        expect(proxyAgentFor("socks5://proxy.example:1080")).toBeNull();
     });
 });
