@@ -115,7 +115,11 @@ Em casa o yt-dlp funciona, mas em servidor de nuvem o YouTube costuma bloquear c
    - `COOKIES_TXT`: conteúdo bruto, aceitando `\n` literal.
 
    Os cookies expiram; quando voltar o erro de bot, exporte de novo.
-4. **Proxy.** IPs de datacenter são os mais bloqueados. `YTDLP_PROXY=http://user:pass@host:port` com um proxy residencial resolve na maioria dos casos.
+4. **Proxy.** IPs de datacenter (AWS, GCP, Azure) são os mais bloqueados. Um proxy **residencial** resolve na maioria dos casos: `YTDLP_PROXY=http://user:pass@host:port`.
+   - Use **sessão fixa (sticky)**, de 10 minutos ou mais. O link do áudio que o YouTube entrega vale só para o IP que o pediu; se o proxy trocar de IP a cada requisição, os downloads falham com 403.
+   - Use proxy **HTTP/HTTPS**. Ele também é usado na consulta ao YouTube Music (troca de faixas indisponíveis), que não aceita SOCKS.
+   - O tráfego é cobrado por GB: cada faixa usa cerca de 1 a 2 MB de consulta e 4 a 8 MB de áudio.
+   - Teste antes de colocar no `.env`: `docker exec mp3-app yt-dlp --proxy "http://..." --simulate --print title -- "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`.
 5. **PO token.** Para casos persistentes, veja o [guia de PO Token do yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) e use `YTDLP_PO_TOKEN=mweb.gvs+TOKEN` (com `YTDLP_PLAYER_CLIENT=default,mweb`).
 6. **Reduza o volume.** `YTDLP_TOPIC_LOOKUP=false` elimina uma busca por faixa ao listar; `YTDLP_SLEEP_BETWEEN_MS=2000` espaça os downloads; `YTDLP_EXTRA_ARGS=--sleep-requests 1` espaça as requisições.
 
