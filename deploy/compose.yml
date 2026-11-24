@@ -5,6 +5,10 @@
 #   /opt/apps/mp3/.env   configuração de produção (modelo em deploy/env.production.example)
 #   /opt/apps/mp3/data   área temporária dos downloads e ZIPs (dono: uid 10001)
 
+# Projeto próprio: sem isso o nome viria da pasta ("deploy"), o mesmo do BTC, e um app
+# substituiria/removeria os containers do outro.
+name: mp3
+
 services:
   app:
     build: ..

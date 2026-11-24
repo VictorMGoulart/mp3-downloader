@@ -10,7 +10,10 @@ APP_DIR=/opt/apps/mp3
 REPO="$APP_DIR/repo"
 STATE="$APP_DIR/.deployed-sha"
 CONTAINER=mp3-app
-COMPOSE=(docker compose -f "$REPO/deploy/compose.yml")
+# -p fixa o projeto mesmo num rollback para um commit antigo, cujo compose não tinha "name:".
+# Sem isso o projeto seria "deploy", o mesmo do BTC, e o --remove-orphans apagaria os containers dele.
+PROJECT=mp3
+COMPOSE=(docker compose -p "$PROJECT" -f "$REPO/deploy/compose.yml")
 TARGET="${1:?informe o commit a publicar}"
 PREV="$(cat "$STATE" 2>/dev/null || true)"
 
@@ -26,9 +29,21 @@ wait_healthy() {
   return 1
 }
 
+# Migração: o mp3-app criado pelas versões antigas pertence ao projeto "deploy" (o do BTC).
+# Remove-o para ser recriado no projeto certo; o BTC não é tocado.
+migrate_project() {
+  local owner
+  owner="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$CONTAINER" 2>/dev/null || true)"
+  if [ -n "$owner" ] && [ "$owner" != "$PROJECT" ]; then
+    echo "==> Movendo $CONTAINER do projeto '$owner' para '$PROJECT'"
+    docker rm -f "$CONTAINER" > /dev/null
+  fi
+}
+
 publish() {
   git -C "$REPO" fetch --quiet origin
   git -C "$REPO" checkout --quiet --force "$1"
+  migrate_project
   "${COMPOSE[@]}" up -d --build --remove-orphans
 }
 
