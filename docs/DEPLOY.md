@@ -14,12 +14,12 @@ Com uma réplica só. Jobs, progresso e rate limit ficam em memória.
 O app roda na mesma EC2 do Dashboard BTC (`apps-server`, sa-east-1), no mesmo modelo:
 
 ```
-navegador ─► Cloudflare Access (login) ─► Tunnel apps-server ─► cloudflared ─► mp3-app:3000
+navegador ─► Cloudflare (público, sem login) ─► Tunnel apps-server ─► cloudflared ─► mp3-app:3000
                                                                  (rede Docker apps-net)
 push na main ─► GitHub Actions (CI) ─► OIDC ─► SSM Run Command ─► deploy/deploy.sh na VM
 ```
 
-Nenhuma porta da VM fica aberta. O endereço fica num subdomínio próprio, por exemplo `mp3.<domínio>`.
+Nenhuma porta da VM fica aberta. O endereço fica num subdomínio próprio, por exemplo `mp3.<domínio>`, e é **público**: diferente do BTC, não passa pelo Cloudflare Access.
 
 | Arquivo | Para quê |
 |---|---|
@@ -61,19 +61,21 @@ aws ssm start-session --region sa-east-1 --target i-XXXX \
 # depois abra http://localhost:3001
 ```
 
-### 3. Cloudflare: login primeiro, rota depois
+### 3. Cloudflare: publicar o subdomínio
 
-Crie o Access **antes** da rota no tunnel, para o endereço nunca ficar aberto.
-
-1. **Zero Trust → Access → Applications → Add an application → Self-hosted**
-   - Name: `MP3 Downloader`; Session duration: `1 week`
-   - Public hostname: subdomínio `mp3`, o seu domínio
-   - Policy `Liberados`: Action **Allow**, Include **Emails** com quem pode usar
-2. **Networks → Tunnels → `apps-server` → Public hostname → Add a public hostname**
+1. **Networks → Tunnels → `apps-server` → Public hostname → Add a public hostname**
    - Subdomain `mp3`, Domain o seu domínio, Type `HTTP`, URL `mp3-app:3000`
-3. Abra `https://mp3.<domínio>`: tem que pedir login antes de mostrar o app. Se abrir direto, apague a rota do tunnel e revise o hostname do Access.
+2. Abra `https://mp3.<domínio>`. O app abre direto, sem login.
+3. Confira que **não** existe uma aplicação do Access cobrindo `mp3.<domínio>` (por exemplo, uma regra com curinga `*.<domínio>`). Se existir, o site vai pedir login.
 
 O `cloudflared` que já roda na VM atende o novo subdomínio sem reiniciar.
+
+**Proteções de um site público.** Qualquer pessoa pode usar o app, e ele roda na mesma VM do BTC. Por isso:
+- **No app** (`/opt/apps/mp3/.env`): 20 buscas/downloads por visitante a cada 15 min, identificado pelo `CF-Connecting-IP`; 1 download por vez no servidor inteiro; nenhum download começa ou continua com menos de 3 GB livres no disco; o container fica limitado a 900 MB de memória e 1,5 CPU.
+- **Na Cloudflare (opcional, plano Free):**
+  - **Security → WAF → Rate limiting rules**: uma regra para `mp3.<domínio>` com caminho começando em `/api/`, por exemplo 30 requisições em 10 s por IP → Block. Barra abuso antes de chegar à VM.
+  - **Security → Bots → Bot Fight Mode**: desafia robôs conhecidos.
+- **Acompanhe** o uso de disco (`df -h /`), memória (`docker stats mp3-app`) e os logs (`docker logs mp3-app --tail 50`). Muitos downloads saindo do mesmo IP também aumentam a chance de o YouTube bloquear a VM.
 
 ### 4. Esteira (GitHub Actions → AWS)
 
