@@ -9,6 +9,88 @@ O app precisa de **processo Node rodando continuamente**, **disco temporário** 
 
 Com uma réplica só. Jobs, progresso e rate limit ficam em memória.
 
+## Produção: VM da AWS + Cloudflare (junto do Dashboard BTC)
+
+O app roda na mesma EC2 do Dashboard BTC (`apps-server`, sa-east-1), no mesmo modelo:
+
+```
+navegador ─► Cloudflare Access (login) ─► Tunnel apps-server ─► cloudflared ─► mp3-app:3000
+                                                                 (rede Docker apps-net)
+push na main ─► GitHub Actions (CI) ─► OIDC ─► SSM Run Command ─► deploy/deploy.sh na VM
+```
+
+Nenhuma porta da VM fica aberta. O endereço fica num subdomínio próprio, por exemplo `mp3.<domínio>`.
+
+| Arquivo | Para quê |
+|---|---|
+| `deploy/compose.yml` | Container `mp3-app` na rede `apps-net`, com limite de memória e CPU |
+| `deploy/deploy.sh` | Publica um commit, espera ficar saudável e reverte se não ficar |
+| `deploy/env.production.example` | Modelo do `/opt/apps/mp3/.env` |
+| `.github/workflows/ci-cd.yml` | CI em todo push; deploy via SSM em push na `main` |
+
+### 1. Preparar a VM (uma vez)
+
+No Session Manager da `apps-server`, como root (`sudo -i`). O repositório é público, então não precisa de chave de acesso:
+
+```bash
+git clone https://github.com/VictorMGoulart/mp3-downloader.git /opt/apps/mp3/repo
+mkdir -p /opt/apps/mp3/data && chown 10001:10001 /opt/apps/mp3/data
+cp /opt/apps/mp3/repo/deploy/env.production.example /opt/apps/mp3/.env && chmod 600 /opt/apps/mp3/.env
+docker network inspect apps-net >/dev/null && echo "apps-net ok"
+```
+
+### 2. Primeiro build e teste do YouTube (antes de publicar)
+
+```bash
+cd /opt/apps/mp3/repo
+docker compose -f deploy/compose.yml up -d --build      # 5 a 10 min na primeira vez
+docker compose -f deploy/compose.yml ps                 # mp3-app (healthy)
+curl -s http://127.0.0.1:3001/api/status; echo
+# O YouTube aceita o IP da AWS? Precisa imprimir o título, não "Sign in to confirm you're not a bot".
+docker exec mp3-app yt-dlp --simulate --print title -- "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+free -m && df -h /
+```
+
+Se aparecer o erro de bot, configure cookies ou proxy no `/opt/apps/mp3/.env` (seção "Fazendo o yt-dlp funcionar no servidor" abaixo) e rode `docker compose -f deploy/compose.yml up -d --force-recreate`.
+
+Para abrir o app no seu PC antes do domínio, pelo túnel do Session Manager:
+
+```bash
+aws ssm start-session --region sa-east-1 --target i-XXXX \
+  --document-name AWS-StartPortForwardingSession --parameters "portNumber=3001,localPortNumber=3001"
+# depois abra http://localhost:3001
+```
+
+### 3. Cloudflare: login primeiro, rota depois
+
+Crie o Access **antes** da rota no tunnel, para o endereço nunca ficar aberto.
+
+1. **Zero Trust → Access → Applications → Add an application → Self-hosted**
+   - Name: `MP3 Downloader`; Session duration: `1 week`
+   - Public hostname: subdomínio `mp3`, o seu domínio
+   - Policy `Liberados`: Action **Allow**, Include **Emails** com quem pode usar
+2. **Networks → Tunnels → `apps-server` → Public hostname → Add a public hostname**
+   - Subdomain `mp3`, Domain o seu domínio, Type `HTTP`, URL `mp3-app:3000`
+3. Abra `https://mp3.<domínio>`: tem que pedir login antes de mostrar o app. Se abrir direto, apague a rota do tunnel e revise o hostname do Access.
+
+O `cloudflared` que já roda na VM atende o novo subdomínio sem reiniciar.
+
+### 4. Esteira (GitHub Actions → AWS)
+
+O provedor OIDC do GitHub já existe na conta (criado para o BTC).
+
+1. **IAM → Funções → Criar função → Identidade web**: provedor `token.actions.githubusercontent.com`, público `sts.amazonaws.com`, organização `VictorMGoulart`, repositório `mp3-downloader`. Sem permissões. Nome `github-deploy-mp3-downloader`.
+2. **Relações de confiança**: o mesmo JSON da role do BTC, trocando o `sub` para `repo:VictorMGoulart/mp3-downloader:environment:production`.
+3. **Política em linha** `deploy-apps-server`: a mesma da role do BTC (`ssm:SendCommand` só para a instância e o documento `AWS-RunShellScript`, mais `ssm:GetCommandInvocation`).
+4. **GitHub → Settings → Environments → `production`** (criado na primeira execução da esteira):
+   - Deployment branches: só `main`
+   - Variables: `AWS_ROLE_ARN` (`arn:aws:iam::<conta>:role/github-deploy-mp3-downloader`), `EC2_INSTANCE_ID` (o mesmo do BTC), `AWS_REGION` = `sa-east-1`
+5. Primeiro deploy: **Actions → CI/CD → Run workflow**. Depois, todo push na `main` publica sozinho.
+
+### Recursos da VM
+
+A `t4g.small` (2 GB) é dividida com o BTC. O `deploy/compose.yml` limita o app a 900 MB e 1,5 CPU, e o `.env` de produção usa 1 download por vez com 2 faixas em paralelo. Se ficar apertado, suba a instância para `t4g.medium` (4 GB). Cada faixa ocupa cerca de 8 MB em disco até o ZIP ser descartado; acompanhe com `df -h /`.
+
 ## Passo a passo (Docker)
 
 ```bash
