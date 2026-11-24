@@ -7,7 +7,7 @@ import { config } from "./config";
 import { DownloadError, downloadMP3, enrichPlaylist, findReplacement, listPlaylist, removePartialFiles } from "./helper/youtube.adapter";
 import { zipFolder } from "./helper/zipper";
 import { removeQuietly } from "./helper/fsRetry";
-import { createRateLimiter } from "./helper/rateLimit";
+import { clientIp, createRateLimiter } from "./helper/rateLimit";
 import { DownloadItem, ValidationError, parseDownloadRequest, parseYoutubeUrl, safeFilename } from "./helper/validation";
 import { getCookiesFile, getYtDlpVersion } from "./helper/ytdlp";
 import { DownloadProgressEvent } from "./type/video.type";
@@ -27,7 +27,24 @@ app.use((_req, res, next) => {
 });
 app.use(express.static(config.server.publicDir, { index: "index.html", maxAge: config.isProd ? "1h" : 0 }));
 
-const limiter = createRateLimiter(config.limits.rateLimitPerWindow, config.limits.rateLimitWindowMinutes * 60_000);
+const limiter = createRateLimiter(
+    config.limits.rateLimitPerWindow,
+    config.limits.rateLimitWindowMinutes * 60_000,
+    Date.now,
+    (req) => clientIp(req, config.server.clientIpHeader)
+);
+
+/** Espaço livre (MB) no disco de DATA_DIR; Infinity se não der para medir. */
+function freeDiskMb(): number {
+    try {
+        const s = fs.statfsSync(config.storage.dataDir);
+        return (s.bavail * s.bsize) / 1024 / 1024;
+    } catch {
+        return Infinity;
+    }
+}
+/** O disco pode ser compartilhado com outros apps: abaixo do mínimo, não começa nem continua downloads. */
+const diskLow = () => config.limits.minFreeDiskMb > 0 && freeDiskMb() < config.limits.minFreeDiskMb;
 
 // ---------- Jobs ----------
 interface JobData {
@@ -230,8 +247,23 @@ async function runQueue(job: JobData) {
         }
     };
 
+    let stoppedForDisk = false;
     const worker = async () => {
         while (!job.abort.signal.aborted && next < job.items.length) {
+            if (diskLow()) {
+                // Para de baixar e entrega o que já foi baixado; as faixas restantes contam como falha.
+                stoppedForDisk = true;
+                while (next < job.items.length) {
+                    const skipped = job.items[next++];
+                    failures.push(skipped.title);
+                    job.failedIds.push(skipped.id);
+                    job.completedCount++;
+                }
+                job.currentIndex = job.completedCount;
+                job.message = "Servidor com pouco espaço em disco: entregando as faixas já baixadas.";
+                broadcastJob(job);
+                return;
+            }
             const i = next++;
             const item = job.items[i];
             // currentIndex = faixas concluídas; currentItem = a última que começou
@@ -284,7 +316,8 @@ async function runQueue(job: JobData) {
         } else {
             job.status = "completed";
             job.message = `Concluído · ${mp3Count} de ${job.totalCount} faixa(s)`;
-            if (failures.length) job.message += ` · falharam: ${failures.join(", ")}`;
+            if (stoppedForDisk) job.message += " · interrompido por falta de espaço no servidor";
+            else if (failures.length) job.message += ` · falharam: ${failures.join(", ")}`;
         }
     } catch (err) {
         console.error("[zip]", err);
@@ -349,6 +382,10 @@ app.post("/api/download", limiter.middleware, (req: Request, res: Response, next
     try {
         const { items, zipName } = parseDownloadRequest(req.body, config.limits.maxTracksPerJob);
 
+        if (diskLow()) {
+            res.setHeader("Retry-After", "300");
+            return res.status(503).json({ error: "Servidor sem espaço em disco no momento. Tente novamente mais tarde." });
+        }
         if (activeJobs() >= config.limits.maxConcurrentJobs) {
             res.setHeader("Retry-After", "30");
             return res.status(503).json({ error: "Servidor ocupado com outros downloads. Tente novamente em instantes." });

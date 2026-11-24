@@ -21,6 +21,7 @@ describe("buildConfig", () => {
         expect(c.isProd).toBe(false);
         expect(c.server.trustProxy).toBe(false);
         expect(c.limits.rateLimitPerWindow).toBe(0);
+        expect(c.limits.minFreeDiskMb).toBe(0);
         expect(c.storage.dataDir).toBe(path.resolve(tmp, "tmp_downloads"));
         expect(c.ytdlp.bin).toBe("yt-dlp");
     });
@@ -30,6 +31,14 @@ describe("buildConfig", () => {
         expect(c.server.trustProxy).toBe(true);
         expect(c.limits.rateLimitPerWindow).toBeGreaterThan(0);
         expect(c.ytdlp.topicLookup).toBe(true);
+        expect(c.limits.minFreeDiskMb).toBe(2048);
+        expect(c.server.clientIpHeader).toBe("");
+    });
+
+    it("lê o cabeçalho de IP do proxy e o mínimo de disco", () => {
+        const c = buildConfig({ CLIENT_IP_HEADER: "CF-Connecting-IP", MIN_FREE_DISK_MB: "0" }, tmp);
+        expect(c.server.clientIpHeader).toBe("cf-connecting-ip");
+        expect(c.limits.minFreeDiskMb).toBe(0);
     });
 
     it("lê valores da env", () => {

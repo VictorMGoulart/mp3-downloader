@@ -73,6 +73,11 @@ export function buildConfig(env: Env = process.env, cwd = process.cwd()) {
             port: int(env, "PORT", 3000, { min: 1, max: 65535 }),
             /** Necessário atrás de proxy reverso (Render, Railway, Fly, Nginx) para pegar o IP real no rate limit. */
             trustProxy: bool(env, "TRUST_PROXY", isProd),
+            /**
+             * Cabeçalho com o IP do visitante posto pelo proxy da frente (ex.: "cf-connecting-ip" na Cloudflare).
+             * Só use se TODO o tráfego passar por esse proxy; senão o visitante consegue forjar o IP.
+             */
+            clientIpHeader: (str(env, "CLIENT_IP_HEADER") ?? "").toLowerCase(),
             /** Origens liberadas para CORS. Vazio = só mesma origem (recomendado quando o front é servido pelo próprio servidor). */
             corsOrigins: list(env, "CORS_ORIGINS"),
             publicDir: path.resolve(__dirname, "../public"),
@@ -90,6 +95,8 @@ export function buildConfig(env: Env = process.env, cwd = process.cwd()) {
             /** Requisições por IP por janela em /api/playlist e /api/download. 0 desativa. */
             rateLimitPerWindow: int(env, "RATE_LIMIT_MAX", isProd ? 20 : 0, { min: 0 }),
             rateLimitWindowMinutes: int(env, "RATE_LIMIT_WINDOW_MINUTES", 15, { min: 1 }),
+            /** Espaço livre mínimo em DATA_DIR para aceitar e continuar downloads. 0 desativa. */
+            minFreeDiskMb: int(env, "MIN_FREE_DISK_MB", isProd ? 2048 : 0, { min: 0 }),
         },
         ytdlp: {
             bin: str(env, "YTDLP_PATH", "yt-dlp"),

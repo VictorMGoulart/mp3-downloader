@@ -1,10 +1,22 @@
 import type { NextFunction, Request, Response } from "express";
 
+/** IP do visitante: o cabeçalho do proxy da frente (se configurado) ou o `req.ip` do Express. */
+export function clientIp(req: Pick<Request, "ip" | "headers">, header = ""): string {
+    const fromHeader = header ? req.headers[header] : undefined;
+    const value = Array.isArray(fromHeader) ? fromHeader[0] : fromHeader;
+    return value?.trim() || req.ip || "unknown";
+}
+
 /**
  * Rate limit em memória por IP (janela fixa). Suficiente para uma instância única;
  * com várias réplicas, troque por um store compartilhado (ex.: Redis).
  */
-export function createRateLimiter(max: number, windowMs: number, now: () => number = Date.now) {
+export function createRateLimiter(
+    max: number,
+    windowMs: number,
+    now: () => number = Date.now,
+    keyOf: (req: Request) => string = (req) => clientIp(req)
+) {
     const hits = new Map<string, { count: number; resetAt: number }>();
 
     const sweep = setInterval(() => {
@@ -26,7 +38,7 @@ export function createRateLimiter(max: number, windowMs: number, now: () => numb
     }
 
     function middleware(req: Request, res: Response, next: NextFunction) {
-        const { allowed, retryAfterSec } = check(req.ip || "unknown");
+        const { allowed, retryAfterSec } = check(keyOf(req));
         if (allowed) return next();
         res.setHeader("Retry-After", String(retryAfterSec));
         res.status(429).json({ error: "Muitas requisições. Tente novamente em alguns minutos." });
