@@ -1,0 +1,108 @@
+# Esteira do MP3 Downloader (mesma VM e mesmo modelo do Dashboard BTC).
+#   - Todo push e pull request: instala, checa tipos, roda os testes e o build.
+#   - Push na main (ou execução manual): publica na VM via SSM Run Command.
+#
+# O deploy usa OIDC: o GitHub troca um token próprio por credenciais temporárias da AWS
+# (role com permissão só de mandar comando para a VM). Nenhuma chave da AWS fica no GitHub.
+# Configuração em Settings -> Environments -> production -> Variables:
+#   AWS_ROLE_ARN, EC2_INSTANCE_ID, AWS_REGION
+name: CI/CD
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit a publicar (vazio = último da main)'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tipos, testes e build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    name: Publicar na VM
+    needs: check
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: production
+    # Um deploy por vez; um novo espera o anterior terminar (não cancela no meio).
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'sa-east-1' }}
+      TARGET_SHA: ${{ inputs.ref || github.sha }}
+    steps:
+      - name: Conferir configuração
+        id: cfg
+        run: |
+          if [ -z "$AWS_ROLE_ARN" ] || [ -z "$EC2_INSTANCE_ID" ]; then
+            echo "::warning::Deploy ignorado: configure AWS_ROLE_ARN e EC2_INSTANCE_ID no environment 'production'."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Credenciais temporárias da AWS (OIDC)
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          TOKEN="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)"
+          echo "::add-mask::$TOKEN"
+          if ! CREDS="$(aws sts assume-role-with-web-identity --role-arn "$AWS_ROLE_ARN" --role-session-name "gh-${GITHUB_RUN_ID}" \
+            --web-identity-token "$TOKEN" --duration-seconds 3600 --query Credentials --output json)"; then
+            # Mostra o que o token contém (não é segredo) para comparar com a relação de confiança da role.
+            PAYLOAD="$(cut -d. -f2 <<< "$TOKEN" | tr '_-' '/+')"
+            while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do PAYLOAD="${PAYLOAD}="; done
+            echo "::error::A AWS recusou o token. A relação de confiança da role precisa aceitar exatamente:"
+            base64 -d <<< "$PAYLOAD" | jq '{iss, aud, sub, repository, environment, ref}'
+            echo "Principal esperado: arn:aws:iam::$(cut -d: -f5 <<< "$AWS_ROLE_ARN"):oidc-provider/token.actions.githubusercontent.com"
+            exit 1
+          fi
+          for k in AccessKeyId:AWS_ACCESS_KEY_ID SecretAccessKey:AWS_SECRET_ACCESS_KEY SessionToken:AWS_SESSION_TOKEN; do
+            v="$(jq -r ".${k%%:*}" <<< "$CREDS")"
+            echo "::add-mask::$v"
+            echo "${k##*:}=$v" >> "$GITHUB_ENV"
+          done
+
+      - name: Publicar via SSM
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          CMD="git -C /opt/apps/mp3/repo fetch --quiet origin && git -C /opt/apps/mp3/repo checkout --quiet --force $TARGET_SHA && bash /opt/apps/mp3/repo/deploy/deploy.sh $TARGET_SHA"
+          ID="$(aws ssm send-command --region "$AWS_REGION" --instance-ids "$EC2_INSTANCE_ID" --document-name AWS-RunShellScript \
+            --comment "deploy ${TARGET_SHA:0:7}" --timeout-seconds 1200 \
+            --parameters "$(jq -nc --arg c "$CMD" '{commands: [$c], executionTimeout: ["1200"]}')" \
+            --query Command.CommandId --output text)"
+          echo "Comando SSM: $ID"
+          for _ in $(seq 1 180); do
+            sleep 5
+            STATUS="$(aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$ID" --instance-id "$EC2_INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)"
+            case "$STATUS" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+          aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$ID" --instance-id "$EC2_INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text || true
+          echo "Status final: $STATUS"
+          [ "$STATUS" = "Success" ]
