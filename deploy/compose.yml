@@ -1,0 +1,37 @@
+# MP3 Downloader na VM (a mesma do Dashboard BTC). Rodar a partir da raiz do repositório clonado:
+#   docker compose -f deploy/compose.yml up -d --build
+#
+# Fora do repositório (não versionados), na VM:
+#   /opt/apps/mp3/.env   configuração de produção (modelo em deploy/env.production.example)
+#   /opt/apps/mp3/data   área temporária dos downloads e ZIPs (dono: uid 10001)
+
+services:
+  app:
+    build: ..
+    image: mp3-downloader:latest
+    container_name: mp3-app
+    env_file: /opt/apps/mp3/.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /data
+    volumes:
+      - /opt/apps/mp3/data:/data
+    # Só no loopback da VM (inalcançável de fora). A 3000 já é do BTC, por isso a 3001.
+    # Permite abrir o app pelo túnel do Session Manager antes de publicar na Cloudflare.
+    ports:
+      - "127.0.0.1:3001:3000"
+    # A VM é compartilhada com o BTC: limita memória e CPU para um download grande não derrubar o outro app.
+    mem_limit: 900m
+    cpus: 1.5
+    restart: unless-stopped
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks: [apps-net]
+
+networks:
+  # Rede compartilhada com o cloudflared (já criada no deploy do BTC).
+  apps-net:
+    external: true

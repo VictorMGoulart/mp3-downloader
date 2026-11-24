@@ -1,0 +1,4 @@
+# Scripts e configs que rodam no Linux (VM e GitHub Actions) sempre com LF.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
